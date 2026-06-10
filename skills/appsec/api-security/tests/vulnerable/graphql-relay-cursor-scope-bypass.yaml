@@ -1,0 +1,42 @@
+name: graphql-relay-cursor-scope-bypass
+owasp_api_risks:
+  - API1:2023
+  - API4:2023
+language: javascript
+expected_findings:
+  - API-CURSOR-01
+  - API-CURSOR-03
+description: >
+  The GraphQL Relay-style cursor is only base64 encoded and carries tenant and
+  object position state. A support actor can change the cursor tenant or replay
+  it across query scopes because delegated actor scope, audience, query shape,
+  and expiry are not integrity-protected or revalidated.
+snippet: |
+  const resolvers = {
+    Query: {
+      invoicesConnection: async (_, { after }, context) => {
+        const cursor = after
+          ? Buffer.from(after, "base64url").toString("utf8").split(":")
+          : ["Invoice", context.user.tenantId, "0"];
+
+        const [, tenantId, afterId] = cursor;
+
+        const rows = await db.invoice.findMany({
+          where: {
+            tenantId,
+            id: { gt: afterId },
+            supportVisible: true,
+          },
+          orderBy: { id: "asc" },
+          take: 100,
+        });
+
+        return {
+          edges: rows.map((row) => ({
+            node: row,
+            cursor: Buffer.from(`Invoice:${tenantId}:${row.id}`).toString("base64url"),
+          })),
+        };
+      },
+    },
+  };
