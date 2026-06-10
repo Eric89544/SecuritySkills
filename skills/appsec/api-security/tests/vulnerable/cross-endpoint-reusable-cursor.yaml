@@ -1,0 +1,34 @@
+name: cross-endpoint-reusable-cursor
+owasp_api_risks:
+  - API1:2023
+  - API4:2023
+language: python
+expected_findings:
+  - API-CURSOR-01
+  - API-CURSOR-03
+description: >
+  The cursor is signed, but it omits endpoint audience, query shape, and expiry.
+  A cursor minted for one list endpoint can be replayed against another endpoint
+  or reused indefinitely, so signature presence alone is not enough evidence.
+snippet: |
+  @app.route("/api/v1/orders")
+  @require_auth
+  def list_orders():
+      cursor = request.args.get("cursor")
+      claims = verify_signature(cursor) if cursor else {}
+
+      rows = (
+          Order.query
+          .filter(Order.tenant_id == current_user.tenant_id)
+          .filter(Order.id > claims.get("after_id", 0))
+          .order_by(Order.id.asc())
+          .limit(50)
+          .all()
+      )
+
+      next_cursor = sign_cursor({
+          "tenant_id": current_user.tenant_id,
+          "after_id": rows[-1].id,
+      }) if rows else None
+
+      return jsonify({"items": [row.to_dict() for row in rows], "cursor": next_cursor})
