@@ -17,6 +17,7 @@ BOLA occurs when an API endpoint accepts an object identifier from the client an
 - Authorization logic that checks only whether the user is authenticated, not whether they own or have access to the specific object.
 - Sequential or predictable resource identifiers (auto-increment integers) that enable enumeration.
 - Batch or list endpoints that return objects without filtering by the caller's permissions.
+- Cursor-based list endpoints where decoded cursor fields such as `tenant_id`, `user_id`, `after_id`, `filter`, `sort`, or `aud` are trusted as authorization or query state without being integrity-protected and revalidated against the authenticated principal.
 
 ### REST Vulnerable Patterns
 
@@ -99,6 +100,7 @@ Both can coexist in a single endpoint. An endpoint may lack both a role check (B
 - [ ] Every endpoint that accepts a resource identifier enforces ownership or relationship-based access control.
 - [ ] Authorization checks happen at the data access layer, not only at the controller/route layer.
 - [ ] Batch/list endpoints filter results by the caller's permissions.
+- [ ] Cursor-based list endpoints revalidate tenant, principal, delegated actor scope, and query shape against the current authorization context on every request.
 - [ ] Resource identifiers are UUIDs or non-sequential values to resist enumeration.
 - [ ] GraphQL resolvers enforce authorization on every field that returns sensitive data.
 
@@ -267,19 +269,85 @@ query {
 app.use(express.json()); // Default limit may be very large or unconfigured
 ```
 
+```python
+# VULNERABLE: Client-controlled cursor changes tenant scope and scan position
+@app.route('/api/v1/accounts')
+@require_auth
+def list_accounts():
+    cursor = json.loads(base64.urlsafe_b64decode(request.args['cursor']))
+    tenant_id = cursor.get('tenant_id', current_user.tenant_id)
+    after_id = cursor.get('after_id')
+
+    accounts = (
+        Account.query
+        .filter(Account.tenant_id == tenant_id)
+        .filter(Account.id > after_id)
+        .order_by(Account.id.asc())
+        .limit(100)
+        .all()
+    )
+    return jsonify([a.to_dict() for a in accounts])
+```
+
 ### Remediation Guidance
 
 - Implement rate limiting at the API gateway and/or application layer. Use sliding window or token bucket algorithms. Set per-endpoint limits based on expected legitimate usage.
 - Enforce maximum pagination size (e.g., `limit` capped at 100). Default to a reasonable page size (e.g., 20).
+- For cursor pagination, use server-issued opaque cursors that are integrity-protected and bound to the authenticated principal, tenant or relationship scope, endpoint audience, query shape, sort tuple, expiry, and page-size policy version. Revalidate these claims against current authorization before using them in a query.
 - Set maximum request body sizes (`express.json({ limit: '1mb' })`).
 - For GraphQL: enforce query depth limits (e.g., max depth 5), complexity analysis (weighted field costs), and batch query limits.
 - Set execution timeouts for database queries and downstream API calls.
 - Implement cost alerts and circuit breakers for operations that trigger billable third-party APIs.
 
+### Cursor Pagination Evidence Gate
+
+Cursor pagination must be reviewed as both API1:2023 and API4:2023 evidence when the cursor influences object scope, filters, sort position, or scan cost. Do not treat a capped `limit` as sufficient if the cursor is client-controlled or reusable across scopes.
+
+| Gate | Evidence Required | Fail / Downgrade Conditions |
+|---|---|---|
+| **API-CURSOR-01: Cursor integrity and scope gate** | Cursor is server-issued, opaque or signed/MACed, tenant-bound, principal- or delegated-actor-bound, endpoint-audience-bound, query-shape-bound, expiry-bound, and revalidated against current authorization before query construction. | Base64/JSON cursor is trusted directly; signed cursor omits tenant, user, audience, query shape, or expiry; cursor issued for one endpoint is accepted by another; delegated/admin scope is not represented. |
+| **API-CURSOR-02: Stable ordering and snapshot gate** | Pagination uses a deterministic unique sort tuple such as `(created_at, id)` or `(sequence, id)`, and documents snapshot, high-watermark, or explicit eventual-consistency behavior for concurrent inserts/deletes. | Cursor stores only a non-unique timestamp or offset; concurrent writes can duplicate or skip records; export/audit workflows assume completeness without snapshot or high-watermark evidence. |
+| **API-CURSOR-03: Replay and cost-control gate** | Page size is fixed or capped server-side, cursor TTL is bounded, stale/replayed cursors fail safely or are idempotent, and repeated cursor scans/query-shape abuse are rate-limited or monitored. | Replayed cursors trigger unbounded repeated scans; cursor lifetime is indefinite; client can change page size, sort, filters, or join scope through cursor fields. |
+
+#### Cursor Examples
+
+```python
+# SECURE: Signed cursor binds scope and stable sort tuple
+claims = verify_cursor(cursor, audience='transactions:list') if cursor else None
+if claims and claims['tenant_id'] != current_user.tenant_id:
+    abort(403)
+
+page_size = 50
+rows = (
+    Transaction.query
+    .filter(Transaction.tenant_id == current_user.tenant_id)
+    .filter(
+        tuple_(Transaction.created_at, Transaction.id)
+        < (claims['last_seen_at'], claims['last_id'])
+        if claims else True
+    )
+    .order_by(Transaction.created_at.desc(), Transaction.id.desc())
+    .limit(page_size + 1)
+    .all()
+)
+
+next_cursor = sign_cursor({
+    'tenant_id': current_user.tenant_id,
+    'aud': 'transactions:list',
+    'query_shape': 'tenant-transactions-v1',
+    'last_seen_at': rows[page_size - 1].created_at.isoformat(),
+    'last_id': rows[page_size - 1].id,
+    'page_size': page_size,
+    'exp': int(time.time()) + 900,
+}) if len(rows) > page_size else None
+```
+
 ### Review Checklist
 
 - [ ] Rate limiting is configured for all endpoints, with stricter limits on expensive operations.
 - [ ] Pagination has a maximum page size enforced server-side.
+- [ ] Cursor pagination satisfies `API-CURSOR-01` through `API-CURSOR-03` when cursor state affects authorization scope, query filters, sort position, or scan cost.
+- [ ] Cursor-based exports or audit feeds document whether results are snapshot-consistent, high-watermark based, or explicitly eventually consistent.
 - [ ] Request body size limits are configured.
 - [ ] GraphQL queries have depth limits, complexity limits, and batch restrictions.
 - [ ] Database queries and downstream calls have execution timeouts.

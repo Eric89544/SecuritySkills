@@ -11,7 +11,7 @@ phase: [design, build, review]
 frameworks: [OWASP-API-Security-2023, OWASP-ASVS]
 difficulty: intermediate
 time_estimate: "20-40min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -36,8 +36,9 @@ Before analyzing any endpoint, establish a complete inventory of the API surface
 3. **Map authentication mechanisms** -- OAuth 2.0 flows, API keys, JWTs, session cookies, mTLS, or custom tokens. Note which endpoints require authentication and which are public.
 4. **Identify authorization models** -- RBAC, ABAC, ownership-based, or no authorization. Document how object-level and function-level access control decisions are made.
 5. **Catalog data objects** -- List the resources/entities exposed by the API and their sensitivity classification (PII, financial, internal, public).
-6. **Note rate limiting and quota configurations** -- Document any existing throttling, quota, or cost-control mechanisms at the gateway or application layer.
-7. **Identify downstream dependencies** -- Third-party APIs, internal microservices, or webhooks that the API consumes.
+6. **Catalog list and pagination semantics** -- For every list/search/export endpoint, record whether it uses offset, limit, cursor, Relay-style, or keyset pagination. Capture page-size policy, cursor format, tenant/principal binding, query-shape binding, sort tuple, expiry, replay behavior, and snapshot/high-watermark semantics.
+7. **Note rate limiting and quota configurations** -- Document any existing throttling, quota, or cost-control mechanisms at the gateway or application layer.
+8. **Identify downstream dependencies** -- Third-party APIs, internal microservices, or webhooks that the API consumes.
 
 > **Gate:** Do not proceed until the API style, authentication model, authorization model, and endpoint inventory are documented. Incomplete scope leads to missed findings.
 
@@ -92,7 +93,7 @@ The final review output must be structured as follows:
 **API Style:** [REST / GraphQL / gRPC / Hybrid]
 **Specification:** [OpenAPI spec path, if applicable]
 **Date:** [review date]
-**Reviewer:** AI Agent -- api-security skill v1.0.0
+**Reviewer:** AI Agent -- api-security skill v1.0.1
 
 ### Summary
 
@@ -111,6 +112,12 @@ The final review output must be structured as follows:
 
 **Total Findings:** [count]
 **Critical:** [count] | **High:** [count] | **Medium:** [count] | **Low:** [count] | **Info:** [count]
+
+### Cursor Pagination Assessment
+
+| Endpoint | Page Size Control | Cursor Integrity and Scope | Stable Ordering / Snapshot | Replay / Cost Control | Decision |
+|---|---|---|---|---|---|
+| [path/query] | [server-fixed/capped/client-controlled] | [tenant/principal/audience/query-shape/expiry evidence] | [unique sort tuple, snapshot, high-watermark, or eventual-consistency note] | [TTL, stale cursor handling, repeated scan monitoring] | [Pass/Partial/Fail/Not Evaluable] |
 
 ### Findings
 
@@ -213,7 +220,9 @@ Unlike REST, where authorization can be enforced per endpoint, GraphQL requires 
 
 5. **Applying rate limiting only to authentication endpoints.** Every API endpoint requires rate limiting proportional to its cost and sensitivity. Data-heavy endpoints, search functions, and export operations are frequent targets for abuse even when properly authenticated.
 
-6. **Ignoring upstream API trust.** Data received from third-party APIs and even internal microservices must be validated before use. A compromised upstream service can inject SQL, XSS, or SSRF payloads through otherwise trusted data channels.
+6. **Treating cursor pagination as only a page-size problem.** A server-fixed page size is necessary, but cursor pagination can also carry authorization state, query filters, sort position, and cost-control state. Review signed/opaque cursors for tenant and principal binding, endpoint audience, query-shape binding, expiry, stable ordering, and replay behavior before closing API1 or API4 findings.
+
+7. **Ignoring upstream API trust.** Data received from third-party APIs and even internal microservices must be validated before use. A compromised upstream service can inject SQL, XSS, or SSRF payloads through otherwise trusted data channels.
 
 ---
 

@@ -1,0 +1,30 @@
+name: unstable-cursor-ordering-scan-amplification
+owasp_api_risks:
+  - API4:2023
+language: javascript
+expected_findings:
+  - API-CURSOR-02
+  - API-CURSOR-03
+description: >
+  The cursor stores only createdAt, which is not a unique stable sort tuple.
+  Concurrent rows with the same timestamp can be skipped or repeated, and stale
+  cursor replay can force repeated scans.
+snippet: |
+  app.get("/api/v1/audit-events", requireAuth, async (req, res) => {
+    const cursor = JSON.parse(Buffer.from(req.query.cursor || "{}", "base64url"));
+    const rows = await db.auditEvents.findMany({
+      where: {
+        tenantId: req.user.tenantId,
+        createdAt: { lt: cursor.createdAt || new Date() }
+      },
+      orderBy: { createdAt: "desc" },
+      take: 100
+    });
+
+    res.json({
+      items: rows,
+      next_cursor: Buffer.from(JSON.stringify({
+        createdAt: rows.at(-1)?.createdAt
+      })).toString("base64url")
+    });
+  });

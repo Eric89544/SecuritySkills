@@ -1,0 +1,43 @@
+name: signed-tenant-bound-cursor
+owasp_api_risks:
+  - API1:2023
+  - API4:2023
+language: python
+expected_result: no_finding
+description: >
+  The endpoint uses a server-fixed page size, verifies a signed cursor audience,
+  revalidates tenant scope against the current principal, and carries a unique
+  stable sort tuple with an expiry.
+snippet: |
+  @app.route("/api/v1/transactions")
+  @require_auth
+  def list_transactions():
+      cursor = request.args.get("cursor")
+      claims = verify_cursor(cursor, audience="transactions:list") if cursor else None
+      page_size = 50
+
+      if claims and claims["tenant_id"] != current_user.tenant_id:
+          abort(403)
+
+      rows = (
+          Transaction.query
+          .filter(Transaction.tenant_id == current_user.tenant_id)
+          .filter(
+              tuple_(Transaction.created_at, Transaction.id)
+              < (claims["last_seen_at"], claims["last_id"])
+              if claims else True
+          )
+          .order_by(Transaction.created_at.desc(), Transaction.id.desc())
+          .limit(page_size + 1)
+          .all()
+      )
+
+      next_cursor = sign_cursor({
+          "tenant_id": current_user.tenant_id,
+          "aud": "transactions:list",
+          "query_shape": "tenant-transactions-v1",
+          "last_seen_at": rows[page_size - 1].created_at.isoformat(),
+          "last_id": rows[page_size - 1].id,
+          "page_size": page_size,
+          "exp": int(time.time()) + 900,
+      }) if len(rows) > page_size else None

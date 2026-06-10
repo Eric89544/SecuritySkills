@@ -1,0 +1,29 @@
+name: client-controlled-cursor-tenant-bypass
+owasp_api_risks:
+  - API1:2023
+  - API4:2023
+language: python
+expected_findings:
+  - API-CURSOR-01
+  - API-CURSOR-03
+description: >
+  The cursor is decoded from client-controlled base64 JSON and trusted as query
+  authorization state. A caller can change tenant_id or after_id while retaining
+  a capped page size, so a max limit alone is not sufficient evidence.
+snippet: |
+  @app.route("/api/v1/accounts")
+  @require_auth
+  def list_accounts():
+      cursor = json.loads(base64.urlsafe_b64decode(request.args["cursor"]))
+      tenant_id = cursor.get("tenant_id", current_user.tenant_id)
+      after_id = cursor.get("after_id")
+
+      return jsonify([
+          a.to_dict()
+          for a in Account.query
+              .filter(Account.tenant_id == tenant_id)
+              .filter(Account.id > after_id)
+              .order_by(Account.id.asc())
+              .limit(100)
+              .all()
+      ])
