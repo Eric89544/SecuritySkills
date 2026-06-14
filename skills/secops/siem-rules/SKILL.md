@@ -12,7 +12,7 @@ phase: [operate]
 frameworks: [MITRE-ATT&CK-v16]
 difficulty: intermediate
 time_estimate: "20-40min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -57,6 +57,8 @@ Before beginning, gather or confirm:
 - [ ] **Alert priority and response:** Desired severity level and expected analyst response procedure.
 - [ ] **Performance constraints:** Query time window, maximum execution time, and scheduled frequency.
 - [ ] **Existing rules:** Any current rules covering similar detections that may overlap or conflict.
+- [ ] **Suppression inventory:** Existing exclusions, owners, tickets, expiry dates, review cadence, and blast radius.
+- [ ] **Regression fixtures:** At least one should-alert event and one should-not-alert event for new rules, tuned rules, and Sigma/SIEM conversions.
 
 ---
 
@@ -432,7 +434,7 @@ index=wineventlog sourcetype="WinEventLog:Security" EventCode=4624 LogonType=3
 2. **Statistical analysis:** Calculate mean, median, and standard deviation of the daily/hourly result count.
 3. **Threshold selection:** Set the initial threshold at mean + 2 standard deviations to capture anomalous activity while filtering normal variance.
 4. **Iterative tuning:** After deployment, review alerts weekly for the first month. Adjust the threshold based on TP/FP ratio.
-5. **Exclusion management:** Add exclusions for confirmed legitimate activity. Document each exclusion with a ticket reference and review date.
+5. **Exclusion management:** Add exclusions only for confirmed legitimate activity. Document each exclusion with exact scope, owner, ticket, expiry date, and removal/review path.
 
 **Threshold tuning parameters:**
 
@@ -456,7 +458,34 @@ Suppression:         Enabled, 1 hour
 Entity mapping:      Account -> UserPrincipalName, IP -> IPAddress, Host -> Computer
 ```
 
-### Step 5: Detection Rule Lifecycle Management
+### Step 5: Suppression and Regression Evidence Gates
+
+Suppression is a detection-control change, not a harmless noise tweak. Before accepting a tuned query, converted rule, or local exclusion, apply these gates.
+
+| Gate | Required Evidence | Flag When |
+|------|-------------------|-----------|
+| **SIEM-SUPPRESS-01: Suppression lifecycle** | Owner, ticket/change request, exact suppression condition, expiry date, and removal/review workflow. | Suppression is permanent, global, undocumented, or has no accountable owner. |
+| **SIEM-SUPPRESS-02: Bypass-resistant scope** | Scope binds to the smallest stable attributes: asset, tenant, environment, process path, signer/hash, command shape, source IP, or maintenance window. | Suppression keys only on username, hostname, broad process name, or a reusable tag an attacker can inherit. |
+| **SIEM-FIXTURE-01: Alert parity fixtures** | A should-alert event and a should-not-alert event stored with the rule, plus expected output after tuning or conversion. | Rule conversion changes field names, parser assumptions, or macros without fixtures proving alert parity. |
+
+**Suppression review questions:**
+
+1. Does the exclusion expire automatically, and will expired suppressions alert or fail review?
+2. Can an attacker obtain the same username, host, tag, process name, or query field and inherit the blind spot?
+3. Does the suppression preserve the true-positive fixture while allowing the benign fixture?
+4. Is the scope narrow enough to survive vendor parser upgrades or field normalization changes?
+
+**Fixture expectations:**
+
+| Fixture Type | Purpose | Minimum Content |
+|--------------|---------|-----------------|
+| `should-alert` | Proves the rule still catches the intended behavior. | Event fields, expected entities, and expected alert reason. |
+| `should-not-alert` | Proves benign tuning does not over-alert. | Event fields, false-positive reason, and matching suppression metadata when applicable. |
+| `field-mapping` | Protects Sigma/KQL/SPL conversions from parser drift. | Source fields, target fields, and any lookup/macro dependencies. |
+
+For converted rules, keep the source-to-target field map next to the query. If a Sigma rule used `CommandLine` but the SIEM query uses `process_command_line`, the conversion must include an event fixture that would fail if that mapping drifts.
+
+### Step 6: Detection Rule Lifecycle Management
 
 **Lifecycle stages:**
 
@@ -479,6 +508,7 @@ Entity mapping:      Account -> UserPrincipalName, IP -> IPAddress, Host -> Comp
 | Last triggered date | Within 90 days | > 180 days (rule may be stale or ineffective) |
 | Query execution time | < 30 seconds | > 2 minutes (performance issue) |
 | Exclusion count | < 10 | > 20 (rule may need fundamental redesign) |
+| Expired suppressions in production | 0 | Any expired suppression still active |
 
 **Quarterly review checklist:**
 
@@ -509,7 +539,7 @@ Produce SIEM rule deliverables in this structure:
 ```markdown
 ## SIEM Detection Rule: [Rule Name]
 **Date:** [YYYY-MM-DD]
-**Skill:** siem-rules v1.0.0
+**Skill:** siem-rules v1.0.1
 **Framework:** MITRE ATT&CK v16
 **Platform:** [Microsoft Sentinel (KQL) | Splunk (SPL)]
 
@@ -533,6 +563,16 @@ Produce SIEM rule deliverables in this structure:
 | Time window | [Xm/h] | [Why this window] |
 | Frequency | [Xm/h] | [How often to run] |
 | Suppression | [Xh] | [Cooldown period] |
+
+### Suppression and Regression Evidence
+| Evidence | Value |
+|----------|-------|
+| Suppression owner/ticket | [Owner + ticket, or "none"] |
+| Suppression expiry | [Date/time, or "none"] |
+| Suppression scope | [Host/process/user/tenant/source fields] |
+| Should-alert fixture | [Fixture name or sample event summary] |
+| Should-not-alert fixture | [Fixture name or sample event summary] |
+| Field mapping changes | [Source -> target fields for conversions] |
 
 ### Entity Mapping
 | Entity Type | Source Field |
@@ -631,6 +671,18 @@ Deploying a rule without confirming it fires on known-malicious activity is depl
 ### Pitfall 5: Failing to Suppress Duplicate Alerts
 
 A detection rule that fires every 5 minutes on the same ongoing activity (e.g., a brute force attack lasting 2 hours) floods the alert queue with duplicates. Configure alert suppression or deduplication to prevent the same incident from generating hundreds of identical alerts. Use suppression windows and entity-based grouping to consolidate related alerts.
+
+### Pitfall 6: Accepting Permanent or Global Suppressions as Tuning
+
+A suppression like "exclude this host" or "ignore this service account" may remove noise, but it also creates a reusable blind spot. Safe suppressions are narrow, justified, owner-linked, ticket-linked, and expiry-bound. If the suppression cannot be tested with both a malicious and benign fixture, treat it as a detection gap rather than a tuning win.
+
+### Pitfall 7: Suppressing on Attacker-Reusable Identity Alone
+
+Username-only, group-only, or tag-only exclusions are easy to inherit after credential theft or privilege escalation. Bind suppressions to multiple stable attributes such as tenant, asset, process signer/hash, command shape, source network, or maintenance window, and require a fixture showing malicious reuse still alerts.
+
+### Pitfall 8: Converting Rules Without Alert Parity Fixtures
+
+Sigma-to-KQL/SPL and parser migration work often fails silently when field names drift. A query can compile while matching nothing. Keep source-to-target field mappings and should-alert/should-not-alert event fixtures with each conversion so reviewers can prove that the converted rule still alerts on the intended event and ignores the intended benign case.
 
 ---
 

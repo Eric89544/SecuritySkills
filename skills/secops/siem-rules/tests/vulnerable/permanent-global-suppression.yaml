@@ -1,0 +1,15 @@
+id: permanent-global-suppression
+kind: vulnerable
+summary: Permanent asset-only suppression hides every matching event from the host.
+platform: microsoft-sentinel
+rule_snippet: |
+  DeviceProcessEvents
+  | where TimeGenerated > ago(1h)
+  | where FileName in~ ("powershell.exe", "pwsh.exe")
+  | where DeviceName != "build-01"
+expected_result: should_flag_suppression
+missing_evidence:
+  - no expiry date or removal workflow
+  - no ticket or control owner
+  - suppresses all events from the host instead of one verified benign process
+risk: A compromised build host can run the same suspicious process family without alerting.

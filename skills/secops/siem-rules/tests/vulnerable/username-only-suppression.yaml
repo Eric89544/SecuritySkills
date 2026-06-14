@@ -1,0 +1,14 @@
+id: username-only-suppression
+kind: vulnerable
+summary: Username-only suppression can be reused by an attacker who compromises that account.
+platform: splunk
+rule_snippet: |
+  index=edr sourcetype=process process_name IN ("powershell.exe", "pwsh.exe")
+  | search user!="svc_build"
+  | table _time, host, user, process_name, process_command_line
+expected_result: should_flag_suppression
+missing_evidence:
+  - suppression is not bound to host, process signer, command shape, or maintenance window
+  - no expiry date
+  - no test proving malicious reuse of the account still alerts
+risk: Stolen service-account credentials inherit the same blind spot across hosts.

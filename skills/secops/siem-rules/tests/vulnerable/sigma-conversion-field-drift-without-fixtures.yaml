@@ -1,0 +1,19 @@
+id: sigma-conversion-field-drift-without-fixtures
+kind: vulnerable
+summary: Sigma-to-SIEM conversion changes normalized fields without regression fixtures.
+platform: splunk
+source_rule: suspicious-powershell-download
+source_fields:
+  - Image
+  - CommandLine
+  - User
+converted_query: |
+  index=edr sourcetype=process
+  process_name="powershell.exe" command_line="*DownloadString*"
+  | table _time, host, user_name, process_name, command_line
+expected_result: should_flag_conversion
+missing_evidence:
+  - no field mapping from CommandLine to command_line
+  - no should-alert event fixture
+  - no should-not-alert event fixture
+risk: Parser or CIM field drift can silently turn the converted rule into a non-alerting query.
