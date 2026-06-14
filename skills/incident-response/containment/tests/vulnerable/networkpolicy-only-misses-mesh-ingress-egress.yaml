@@ -1,0 +1,19 @@
+id: networkpolicy-only-misses-mesh-ingress-egress
+kind: vulnerable
+summary: NetworkPolicy-only containment ignores service mesh, shared ingress, and egress gateway paths.
+cluster_context:
+  namespace: prod-payments
+  workload: payments-api
+  cni_network_policy: enabled
+  service_mesh: istio-partial
+  ingress_controller: shared
+  egress_gateway: enabled
+proposed_actions:
+  - apply namespace NetworkPolicy denying all egress from pods labeled quarantine=true
+expected_result: should_flag_kubernetes_containment
+missing_evidence:
+  - CNI egress enforcement was not validated with traffic tests
+  - service mesh AuthorizationPolicy and sidecar routes were not reviewed
+  - ingress routing and egress gateway logs were not included
+  - Kubernetes audit logs were not monitored for continued API-driven movement
+risk: Traffic may still flow through mesh, ingress, or gateway paths even when a NetworkPolicy exists.

@@ -1,0 +1,18 @@
+id: node-isolation-without-tenant-blast-radius
+kind: vulnerable
+summary: Node-level isolation is chosen without namespace, tenant, or evidence impact review.
+cluster_context:
+  node: ip-10-0-42-17
+  hosted_workloads:
+    - prod-payments/payments-api
+    - prod-auth/session-api
+    - observability/otel-collector
+    - ingress/shared-gateway
+proposed_actions:
+  - cloud_security_group: deny all egress for worker node ip-10-0-42-17
+expected_result: should_flag_kubernetes_containment
+missing_evidence:
+  - pod, namespace, node, and cluster containment scopes were not compared
+  - unrelated tenant and ingress impact was not assessed
+  - evidence impact of isolating a shared node was not documented
+risk: The response can disrupt unrelated services while missing the compromised service account or namespace path.

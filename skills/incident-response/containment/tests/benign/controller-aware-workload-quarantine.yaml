@@ -1,0 +1,22 @@
+id: controller-aware-workload-quarantine
+kind: benign
+summary: Quarantine plan preserves evidence while containing a compromised Kubernetes workload.
+cluster_context:
+  namespace: prod-payments
+  workload: payments-api
+  owner_controller: Deployment/payments-api
+  image_digest: registry.example.com/payments-api@sha256:known-good
+  service_account: payments-api
+  node: ip-10-0-42-17
+proposed_actions:
+  - label suspect pods with incident.example.com/quarantine=true
+  - apply namespace-scoped NetworkPolicy that denies workload egress except to ir-tools
+  - pause rollout and block the suspect image digest before deleting or replacing pods
+  - rotate projected service account token, image pull secret, and cloud workload identity binding
+  - validate CNI NetworkPolicy, Istio AuthorizationPolicy, ingress route removal, egress gateway logs, and Kubernetes audit logs
+expected_result: should_not_flag_kubernetes_containment
+safe_because:
+  - owner controller and image digest are identified before pod deletion
+  - containment scope is pod and namespace first, not blind node isolation
+  - credential and RBAC containment are included in addition to network controls
+  - CNI, service mesh, ingress, egress, and audit validation are explicit

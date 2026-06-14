@@ -1,0 +1,20 @@
+id: network-only-with-live-kubernetes-identity
+kind: vulnerable
+summary: Network quarantine leaves Kubernetes API credentials and workload identity active.
+cluster_context:
+  namespace: ci
+  workload: build-deployer
+  service_account: build-deployer
+  automount_service_account_token: true
+  mounted_secrets:
+    - registry-pull-secret
+    - deployer-kubeconfig
+proposed_actions:
+  - apply NetworkPolicy deny all ingress and egress to selected pods
+expected_result: should_flag_kubernetes_containment
+missing_evidence:
+  - projected service account token revocation or pod restart boundary
+  - RBAC binding review for compromised service account
+  - image pull secret, kubeconfig, and cloud workload identity rotation
+  - Kubernetes audit-log monitoring for the stolen identity
+risk: A copied token can continue to operate against the Kubernetes API from outside the quarantined pod.

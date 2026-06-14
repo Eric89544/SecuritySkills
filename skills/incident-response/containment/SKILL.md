@@ -12,7 +12,7 @@ phase: [respond]
 frameworks: [NIST-SP-800-61r2, MITRE-ATT&CK]
 difficulty: intermediate
 time_estimate: "15-30min"
-version: "1.0.1"
+version: "1.0.2"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -55,6 +55,7 @@ Before selecting a containment strategy, gather or confirm:
 - [ ] **Attacker access scope** -- What accounts, systems, and network segments has the attacker accessed or potentially compromised?
 - [ ] **Business criticality of affected systems** -- Revenue impact, customer impact, SLA obligations, regulatory implications of downtime.
 - [ ] **Network topology** -- VLANs, subnets, firewall zones, cloud VPCs, segmentation boundaries relevant to the affected systems.
+- [ ] **Kubernetes/container context** -- If the target is containerized, identify namespace, pod, owner controller, image digest, service account, mounted secrets, node, ingress, egress, CNI, service mesh, and Kubernetes audit-log coverage.
 - [ ] **Evidence preservation status** -- Has volatile evidence been captured? (Reference forensics-checklist.) Containment actions may destroy evidence if not collected first.
 - [ ] **Current containment state** -- What actions, if any, have already been taken?
 
@@ -119,8 +120,43 @@ Short-term containment aims to stop the immediate threat with minimal preparatio
 | **API key rotation** | Generate new API keys, revoke old keys | API key exposure or misuse | Specific services |
 | **Certificate revocation** | Revoke and reissue TLS/mTLS certificates | Certificate compromise, CA compromise | Services using the certificate |
 | **Service account reset** | Reset service account passwords and regenerate keys | Lateral movement via service accounts | Downstream services may break |
+| **Kubernetes identity containment** | Rotate projected service account tokens, revoke risky RBAC bindings, rotate image pull secrets, and review workload identity bindings | Compromised pod, kubeconfig, or service account token | Namespace, workload, or cluster identity |
 | **Kerberos ticket reset** | Reset krbtgt account password (twice, per Microsoft guidance) | Golden ticket attack, domain compromise | Domain-wide impact; requires careful planning |
 | **MFA token reset** | Deregister and re-enroll MFA devices | MFA bypass, SIM swap, device compromise | Individual users |
+
+### Step 2b: Kubernetes / Container Containment
+
+Use this step whenever the affected system is a Kubernetes workload, container platform, service mesh member, or cloud workload identity. Kubernetes containment is controller-aware: deleting a pod, cordoning a node, or applying a NetworkPolicy is not sufficient unless the plan accounts for the control plane and credential paths that can recreate or bypass the isolated workload.
+
+**Required Kubernetes evidence before selecting containment scope:**
+
+- Namespace, pod name, labels, node, and workload owner references.
+- Owner controller type and name: Deployment, ReplicaSet, StatefulSet, DaemonSet, Job, CronJob, or operator-managed custom resource.
+- Image reference by digest, rollout status, admission policy, and whether the same image can be rescheduled.
+- Service account, projected token status, RBAC bindings, image pull secrets, mounted secrets, kubeconfig files, and cloud workload identity binding.
+- CNI NetworkPolicy enforcement mode, service mesh policy layer, ingress routes, DNS policy, egress gateway, and cloud load-balancer paths.
+- Kubernetes audit logs, container runtime logs, egress logs, and traffic-test capability for validating containment.
+
+**Kubernetes containment scope matrix:**
+
+| Scope | Use When | Evidence Impact | Validation |
+|---|---|---|---|
+| **Pod quarantine** | One workload instance is suspect and evidence must be preserved | Preserves pod if label-based policy is used; deletion may destroy volatile evidence | Quarantine label applied, CNI policy enforced, no new traffic from suspect pod |
+| **Namespace isolation** | Multiple pods in one namespace or tenant are suspect | Preserves cluster availability while restricting tenant blast radius | Namespace egress/ingress denied except IR tooling, service health exceptions documented |
+| **Controller freeze** | Deployment, ReplicaSet, DaemonSet, Job, CronJob, or operator can recreate the workload | Prevents silent replacement from the same suspect image | Rollout paused or intentionally scaled, suspect image digest blocked or pinned, no new pods from digest |
+| **Node isolation** | Node compromise, kernel/container runtime compromise, or high-confidence host escape | Can disrupt unrelated tenants and evict evidence if drained | Hosted workload inventory reviewed, business owner approval recorded, node traffic and scheduling blocked |
+| **Cluster-level containment** | Control-plane, admission, registry, or shared identity compromise is suspected | High availability impact; preserves security over service continuity | Control-plane API access restricted, cluster-wide RBAC/secret exposure reviewed, audit logs monitored |
+
+**Finding triggers:**
+
+| ID | Flag This Pattern | Required Remediation Gate |
+|---|---|---|
+| **K8S-CONTAIN-01** | Deleting pods, draining nodes, or scaling workloads before identifying the owner controller and image digest | Identify owner controller, pause or intentionally scale rollout, block or pin the suspect image digest, and document the evidence tradeoff before destructive action |
+| **K8S-CONTAIN-02** | Node-level or cluster-level isolation without pod/namespace/node blast-radius comparison | Compare pod, namespace, node, and cluster containment scopes; record unrelated tenant impact, service availability impact, and approval owner |
+| **K8S-CONTAIN-03** | Network-only quarantine while Kubernetes service account tokens, RBAC bindings, image pull secrets, kubeconfigs, or cloud workload identities remain active | Rotate or invalidate tokens and secrets, review RBAC bindings, monitor Kubernetes audit logs, and verify the identity cannot continue API actions from outside the pod |
+| **K8S-CONTAIN-04** | NetworkPolicy-only containment without CNI, service mesh, ingress, egress gateway, DNS, or cloud load-balancer validation | Run traffic tests and log checks for CNI enforcement, mesh AuthorizationPolicy, ingress route removal, egress gateway denial, DNS policy, and Kubernetes audit activity |
+
+**Safe containment pattern:** prefer label-based pod or namespace quarantine plus controller freeze, token/RBAC containment, and explicit traffic validation before pod deletion. Immediate node or cluster isolation remains valid for destructive workload, host escape, or control-plane compromise scenarios, but the plan must record why surgical containment is not enough.
 
 ### Step 3: Long-Term Containment
 
@@ -212,6 +248,9 @@ After implementing containment, verify effectiveness before proceeding to eradic
 | C2 communication blocked | Monitor network traffic for C2 indicators | No outbound connections to known C2 IPs/domains |
 | Lateral movement blocked | Monitor authentication logs and network flows between segments | No unauthorized cross-segment authentication |
 | Compromised credentials revoked | Attempt authentication with known-compromised credentials | Authentication fails |
+| Kubernetes controller/image contained | Review owner references, rollout state, admission policy, and pod creation events | No new pods launch from suspect image digest or unfrozen controller path |
+| Kubernetes identities contained | Review RBAC, service account tokens, image pull secrets, cloud workload identity, and audit logs | Compromised identity cannot continue Kubernetes API actions |
+| Service Mesh / Ingress / Egress Validation | Run traffic tests and inspect mesh policy, ingress controller, egress gateway, DNS, and CNI logs | Quarantined workload cannot bypass containment through mesh, ingress, egress, or DNS paths |
 | Attacker persistence neutralized | Scan for known persistence mechanisms | No active persistence artifacts |
 | Business services operational (if surgical containment) | Verify critical service health checks | Services responding normally |
 | Evidence preserved | Verify forensic images and memory dumps are intact and hashed | Hash verification passes |
@@ -256,7 +295,7 @@ Produce the containment plan with these exact sections:
 ```markdown
 ## Containment Plan: [Incident ID]
 **Date:** [YYYY-MM-DD]
-**Skill:** containment v1.0.0
+**Skill:** containment v1.0.2
 **Frameworks:** NIST SP 800-61 Rev 2, MITRE ATT&CK
 **Incident Commander:** [Name]
 
@@ -288,6 +327,11 @@ threat severity and business criticality, and expected impact on operations.]
 | Service/System | Impact of Containment | Mitigation | Acceptable |
 |---|---|---|---|
 | [Service] | [Description of disruption] | [Workaround if any] | [Yes/No -- requires escalation] |
+
+### Kubernetes Containment Matrix
+| Workload | Namespace | Owner Controller | Image Digest | Service Account | Proposed Containment | Blast Radius | Evidence Impact | Validation |
+|---|---|---|---|---|---|---|---|---|
+| [Workload or N/A] | [Namespace] | [Deployment/ReplicaSet/DaemonSet/StatefulSet/Job/CronJob/Operator] | [sha256 digest] | [Service account] | [Pod/Namespace/Node/Cluster action] | [Affected tenants/services] | [Preserved/Destroyed/Tradeoff] | [CNI/Mesh/Ingress/Egress/Audit checks] |
 
 ### Containment Validation Checklist
 | Check | Result | Timestamp |
@@ -348,6 +392,14 @@ Disconnecting a business-critical production system from the network stops the a
 
 Implementing containment actions without verifying they work is a common failure mode. Firewall rules may not apply to the correct interface or direction. DNS sinkholes may not affect systems using hardcoded DNS servers. Credential resets may not invalidate existing Kerberos tickets. After every containment action, validate effectiveness through monitoring -- confirm that the specific attacker activity the action was intended to block has actually stopped.
 
+### Pitfall 5: Deleting Kubernetes Pods as "Containment"
+
+Deleting a suspect pod can destroy volatile evidence and may trigger its Deployment, ReplicaSet, DaemonSet, Job, CronJob, or operator to recreate the same workload from the same suspect image. Before deleting or draining anything, identify the owner controller, image digest, rollout state, namespace, service account, and evidence-preservation tradeoff. Prefer controller freeze plus label-based quarantine when the incident allows surgical containment.
+
+### Pitfall 6: Treating NetworkPolicy as Complete Kubernetes Containment
+
+A NetworkPolicy can be necessary but incomplete. Service mesh authorization, shared ingress controllers, egress gateways, DNS policy, cloud load balancers, Kubernetes API credentials, and cloud workload identity can all bypass or outlive pod network isolation. Validate CNI enforcement with traffic tests and include service mesh, ingress, egress, and audit-log checks in the containment plan.
+
 ---
 
 ## 8. Prompt Injection Safety Notice
@@ -376,3 +428,7 @@ This skill processes incident data including attacker-controlled indicators (IP 
 10. **MITRE ATT&CK -- Disk Wipe (T1561)** -- https://attack.mitre.org/techniques/T1561/
 11. **CISA Destructive Malware Guidance** -- https://www.cisa.gov/topics/cyber-threats-and-advisories
 12. **KrebsOnSecurity: Iran-backed wiper attack on Stryker medtech (2026)** -- https://krebsonsystems.com/2026/03/iran-backed-hackers-claim-wiper-attack-on-medtech-firm-stryker/
+13. **Kubernetes: Pods and workload resources** -- https://kubernetes.io/docs/concepts/workloads/pods/
+14. **Kubernetes: Network Policies** -- https://kubernetes.io/docs/concepts/services-networking/network-policies/
+15. **Kubernetes: Service Accounts** -- https://kubernetes.io/docs/concepts/security/service-accounts/
+16. **Kubernetes: Auditing** -- https://kubernetes.io/docs/tasks/debug/debug-cluster/audit/

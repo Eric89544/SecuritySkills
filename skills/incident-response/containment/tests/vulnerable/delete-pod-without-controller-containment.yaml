@@ -1,0 +1,16 @@
+id: delete-pod-without-controller-containment
+kind: vulnerable
+summary: Deleting a suspect pod without controller or image containment recreates the same compromised workload.
+cluster_context:
+  namespace: prod-payments
+  workload: payments-api
+  owner_controller: Deployment/payments-api
+  image_digest: registry.example.com/payments-api@sha256:suspect
+proposed_actions:
+  - kubectl delete pod payments-api-7f8d9c9d6b-x2k4p -n prod-payments
+expected_result: should_flag_kubernetes_containment
+missing_evidence:
+  - owning controller rollout state was not paused or scaled intentionally
+  - suspect image digest was not blocked or pinned before replacement
+  - volatile pod evidence tradeoff was not approved
+risk: The Deployment or ReplicaSet can immediately create a replacement from the same suspect image.
